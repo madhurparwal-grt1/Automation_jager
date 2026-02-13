@@ -177,10 +177,16 @@ Automation_jager/
 │   ├── validate_fix.py            # Fix validation
 │   └── _archived/                 # Legacy/deprecated code
 │
-└── automation_script_build_multi/ # Multi-build utilities
-    ├── README.md                  # Module documentation (see Documentation section)
-    ├── __init__.py
-    └── utils.py                   # Command execution helpers
+├── automation_script_build_multi/ # Multi-build utilities
+│   ├── README.md                  # Module documentation (see Documentation section)
+│   ├── __init__.py
+│   └── utils.py                   # Command execution helpers
+│
+├── F2P_finder/                    # FAIL_TO_PASS test discovery CLI/tooling
+│   ├── cli.py
+│   ├── infer.py
+│   └── ...                        # Additional finder modules
+└── F2P_finder_data/               # Finder runtime/output data directory
 ```
 
 ## Usage
@@ -207,22 +213,8 @@ python3 -m automation_script.main_orchestrator \
     /path/to/workspace
 ```
 
-#### Part 1 Only (Build Docker Image + Base Tests)
-
-```bash
-python3 -m automation_script.main_orchestrator \
-    --part1-only \
-    https://github.com/owner/repo/pull/123 \
-    /path/to/workspace
-```
-
-#### Part 2 Only (Patch + Evaluate)
-
-```bash
-python3 -m automation_script.main_orchestrator \
-    --part2-only \
-    /path/to/workspace
-```
+The orchestrator currently runs the full evaluation workflow in one command
+(BASE run, test-only patch run, full patch run, and metadata generation).
 
 #### Performance Options
 
@@ -455,8 +447,8 @@ python3 -m automation_script.main_orchestrator \
 Check logs and consider using self-healing features (automatic) or manual intervention:
 
 ```bash
-# View build logs
-cat /path/to/workspace/<pr_folder>/logs/part1_build_and_base.log
+# View unified workflow logs
+cat /path/to/workspace/<pr_folder>/logs/workflow.log
 ```
 
 #### Builder Creation Fails
@@ -549,12 +541,12 @@ After successful PR evaluation, the workspace contains:
 
 ```
 workspace/<pr_folder>/
-├── artifacts/              # Test results and outputs
-├── logs/                   # Execution logs
-├── metadata.json           # Comprehensive PR metadata
-├── patches/                # Generated patch files
-├── repo/                   # Cloned repository
-└── outputs/                # Organized final outputs
+├── artifacts/                  # base/, test_patch_only/, pr/ test outputs
+├── docker_images/              # Saved Docker image tar + generated Dockerfile
+├── logs/                       # Unified workflow log (workflow.log)
+├── metadata/                   # instance.json + swe-bench-instance.json
+├── patches/                    # pr.patch, test.patch, code.patch
+└── repo/                       # Cloned repository
 ```
 
 ## Advanced Configuration

@@ -70,7 +70,7 @@ CONTAINER_WORKSPACE_PATH = "/workspace"                 # Evaluation workspace
 # Multi-architecture builds (amd64 + arm64)
 DOCKER_TARGET_PLATFORMS = ["linux/amd64", "linux/arm64"]  # Target platforms for buildx
 DOCKER_BUILDX_BUILDER_NAME = "velora-builder"  # Kept for potential future use
-DOCKER_USE_MULTIARCH = False  # Single architecture builds (faster, simpler)
+DOCKER_USE_MULTIARCH = True  # Build and export universal amd64+arm64 archives
 
 # OCI Image metadata (Jaeger project)
 DOCKER_IMAGE_AUTHORS = "https://www.ethara.ai/"

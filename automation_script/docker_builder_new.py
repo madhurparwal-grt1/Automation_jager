@@ -3,10 +3,29 @@ Docker image building for PR Evaluation Environment.
 
 Generates production-grade Docker images for automated PR evaluation.
 Images are self-contained, reproducible, and require no network access during test execution.
+
+Structure follows DOCKERFILE_STEPS.md (15-step process with MITM proxy support):
+  1. Syntax + FROM
+  2. ARGs (repo, commit, JOBS, MITM_*)
+  3. LABELs (OCI metadata)
+  4. ENV DEBIAN_FRONTEND, TZ
+  5. apt: bash, ca-certificates, curl, git, wget, python3, jq
+  6. ENV proxy (empty) + no_proxy
+  7. mkdir SSL/cert dirs
+  8. Optional: install MITM CA from MITM_CA_CERT_CONTENT
+  9. mkdir /app/repo, /saved/*, /workspace, swe_util, openhands
+  10. apt: build-essential, gcc, g++
+  11. Language block (Java, JS, TS, Go, C, C++, Python, Rust, etc.)
+  12. git clone + checkout
+  13. ln -sf /app/repo /testbed
+  14. WORKDIR /app/repo
+  15. Entry point: repo-specific (no default CMD; set at build/run time)
 """
 
 import logging
 import os
+import json
+import tarfile
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +35,9 @@ from .config import (
     DOCKER_BUILD_JOBS,
     DOCKER_IMAGE_AUTHORS,
     DOCKER_DEFAULT_REPO_URL,
+    DOCKER_TARGET_PLATFORMS,
+    DOCKER_BUILDX_BUILDER_NAME,
+    DOCKER_USE_MULTIARCH,
 )
 from .utils import run_command
 
@@ -25,8 +47,9 @@ from .utils import run_command
 # =============================================================================
 
 def _dockerfile_header(repo_name: str = "", base_commit: str = "", repo_url: str = "") -> str:
-    """Generate minimal Dockerfile header with embedded metadata."""
-    lines = ["# syntax=docker/dockerfile:1"]
+    """Generate Dockerfile header with syntax directive (Step 1)."""
+    lines = ["# Step 1: Syntax & Base Image (DOCKERFILE_STEPS.md)"]
+    lines.append("# syntax=docker/dockerfile:1.6")
     if repo_name:
         lines.append(f"# {repo_name} @ {base_commit[:12] if base_commit else 'HEAD'}")
     if repo_url:
@@ -36,36 +59,76 @@ def _dockerfile_header(repo_name: str = "", base_commit: str = "", repo_url: str
 
 
 def _base_stage(language: str, repo_url: str = "", base_commit: str = "", repo_name: str = "") -> str:
-    """Generate base image setup with system dependencies for harness compatibility."""
+    """
+    Generate base image setup with system dependencies for harness compatibility.
+    
+    Implements Steps 2-9 of DOCKERFILE_STEPS.md:
+      2. ARGs (repo, commit, JOBS, MITM_*)
+      3. LABELs (OCI metadata)
+      4. ENV DEBIAN_FRONTEND, TZ
+      5. apt: bash, ca-certificates, curl, git, wget, python3, jq
+      6. ENV proxy (empty) + no_proxy
+      7. mkdir SSL/cert dirs
+      8. Optional: install MITM CA from MITM_CA_CERT_CONTENT
+      9. mkdir /app/repo, /saved/*, /workspace, swe_util, openhands
+    """
     # Use provided repo_url or the configured default for the ARG
     default_repo_url = repo_url if repo_url else DOCKER_DEFAULT_REPO_URL
     
     return f'''FROM {DOCKER_BASE_IMAGE}
 
+# Step 2: Build Arguments (ARGs)
 ARG REPO_URL={default_repo_url}
 ARG BASE_COMMIT
 ARG JOBS={DOCKER_BUILD_JOBS}
 ARG BUILD_DATE
 ARG TARGETARCH
+ARG MITM_PROXY_PORT
+ARG MITM_PROXY_URL
+ARG MITM_DATA_DIR
+ARG MITM_CONTAINER_NAME
+ARG MITM_CA_CERT
+ARG COMBINED_CA_BUNDLE
+ARG MITM_CA_CERT_CONTENT
 
+# Step 3: Image Labels (OCI metadata)
 LABEL org.opencontainers.image.title="{repo_name or 'pr-eval'}" \\
-      org.opencontainers.image.description="Jaeger project Docker image" \\
+      org.opencontainers.image.description="{repo_name or 'pr-eval'} Docker image with MITM proxy support" \\
       org.opencontainers.image.version="1.0.0" \\
       org.opencontainers.image.created="${{BUILD_DATE}}" \\
       org.opencontainers.image.revision="{base_commit}" \\
       org.opencontainers.image.source="{repo_url}" \\
       org.opencontainers.image.authors="{DOCKER_IMAGE_AUTHORS}"
 
+# Step 4: Base Environment
 # Reserve UID 1000 and configure environment
 RUN userdel -r ubuntu 2>/dev/null || true
 ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
 
-# System dependencies (jq required for harness entry scripts)
+# Step 5: Base System Packages
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     bash ca-certificates curl git wget python3 jq \\
     && rm -rf /var/lib/apt/lists/*
 
-# Directory structure for harness compatibility
+# Step 6: Proxy Environment (empty by default, can be set at build/run time)
+ENV http_proxy="" \\
+    https_proxy="" \\
+    HTTP_PROXY="" \\
+    HTTPS_PROXY="" \\
+    no_proxy="localhost,127.0.0.1,::1" \\
+    NO_PROXY="localhost,127.0.0.1,::1"
+
+# Step 7: SSL/Certificate Directories
+RUN mkdir -p /etc/ssl/certs /etc/pki/tls/certs /etc/pki/ca-trust/extracted/pem /etc/pki/tls
+
+# Step 8: MITM CA Certificate Installation (optional when MITM_CA_CERT_CONTENT is set)
+RUN if [ -n "${{MITM_CA_CERT_CONTENT}}" ]; then \\
+        echo "${{MITM_CA_CERT_CONTENT}}" > /usr/local/share/ca-certificates/mitm-ca.crt && \\
+        update-ca-certificates && \\
+        echo "MITM CA certificate installed"; \\
+    fi
+
+# Step 9: Application & Workspace Directories
 # /app/repo      - Primary source location
 # /testbed       - Legacy source location (symlink)
 # /workspace     - Evaluation workspace
@@ -89,22 +152,35 @@ RUN groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
 
 
 def _clone_repo() -> str:
-    """Clone repository at specified commit with harness-compatible symlinks."""
-    return '''# Clone repository
+    """
+    Clone repository at specified commit with harness-compatible symlinks.
+    
+    Implements Steps 12-14 of DOCKERFILE_STEPS.md:
+      12. git clone + checkout
+      13. ln -sf /app/repo /testbed
+      14. WORKDIR /app/repo
+    """
+    return '''# Step 12: Clone Repo & Checkout
 RUN git clone --filter=blob:none "${REPO_URL}" /app/repo \\
     && cd /app/repo && git checkout "${BASE_COMMIT}"
 
-# Create symlinks for harness compatibility
+# Step 13: Testbed Symlink
 # /testbed -> /app/repo (legacy location expected by some harness scripts)
 RUN ln -sf /app/repo /testbed
 
+# Step 14: Working Directory
 WORKDIR /app/repo
 
 '''
 
 
 def _finalize() -> str:
-    """Final cleanup and validation for harness compatibility."""
+    """
+    Final cleanup and validation for harness compatibility.
+    
+    Implements Step 15 of DOCKERFILE_STEPS.md:
+      15. Entry point: repo-specific (no default CMD; set at build/run time)
+    """
     return '''# Ensure clean git state
 RUN cd /app/repo && git checkout -- . 2>/dev/null || true
 
@@ -119,10 +195,42 @@ RUN set -e \\
     && bash --version >/dev/null \\
     && ! getent passwd 1000
 
+# Fix ownership of repo directory for non-root user
+# This ensures Maven/Gradle can write to target/ directories during test runs
+RUN chown -R appuser:appuser /app/repo
+
+# Ensure persisted cache locations are writable by non-root user
+RUN mkdir -p /saved/ENV/m2/repository /saved/venv/ENV \
+    && chown -R appuser:appuser /saved/ENV /saved/venv/ENV
+
 # Switch to non-root user for security
 USER appuser
 
-CMD ["/bin/bash"]
+# Step 15: Entry point is repo-specific; set CMD/ENTRYPOINT at build time or when running the container.
+'''
+
+
+def _build_tools() -> str:
+    """
+    Generate build tools installation (Step 10 of DOCKERFILE_STEPS.md).
+    
+    Installs: build-essential, gcc, g++
+    """
+    return '''# Step 10: Build Tools
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential gcc g++ \\
+    && rm -rf /var/lib/apt/lists/*
+
+'''
+
+
+# =============================================================================
+# SSL Certificate Environment Variables (used by language blocks)
+# =============================================================================
+
+SSL_CERT_ENV = '''ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \\
+    SSL_CERT_DIR=/etc/ssl/certs
+
 '''
 
 
@@ -148,17 +256,19 @@ def generate_python_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("Python", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    content += '''# Python toolchain
+    content += '''# Step 11: Language-Specific Runtime & Env (Python)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     python3-pip python3-venv python3-dev \\
-    build-essential gcc g++ make libffi-dev libssl-dev \\
+    libffi-dev libssl-dev \\
     && rm -rf /var/lib/apt/lists/*
 
 # Virtual environment
 RUN python3 -m venv /saved/venv/ENV
 ENV VIRTUAL_ENV=/saved/venv/ENV
 ENV PATH="/saved/venv/ENV/bin:$PATH"
+''' + SSL_CERT_ENV + '''
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
 '''
@@ -266,20 +376,20 @@ def generate_rust_dockerfile(
 
     content = _dockerfile_header(effective_name, base_commit, repo_url)
     content += _base_stage("Rust", repo_url, base_commit, effective_name)
+    content += _build_tools()
 
-    pkg_list = ["build-essential", "pkg-config", "libssl-dev"] + list(set(extra_pkgs))
-    content += f'''# Rust build dependencies
+    pkg_list = ["pkg-config", "libssl-dev"] + list(set(extra_pkgs))
+    content += f'''# Step 11: Language-Specific Runtime & Env (Rust)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     {" ".join(pkg_list)} \\
     && rm -rf /var/lib/apt/lists/*
 
 # Rust toolchain (multi-arch: amd64 + arm64)
 # rustup automatically detects architecture and installs correct toolchain
-ENV RUSTUP_HOME=/saved/ENV/rustup
-ENV CARGO_HOME=/saved/ENV/cargo
+ENV CARGO_HOME=/saved/ENV/cargo RUSTUP_HOME=/saved/ENV/rustup
 ENV PATH="/saved/ENV/cargo/bin:$PATH"
 ENV CARGO_BUILD_JOBS=$JOBS
-
+''' + SSL_CERT_ENV + '''
 # Validate architecture before installing Rust toolchain
 RUN ARCH=$(uname -m) && \\
     case "$ARCH" in \\
@@ -362,17 +472,14 @@ def generate_go_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("Go", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    content += f'''# Go build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    build-essential gcc g++ \\
-    && rm -rf /var/lib/apt/lists/*
-
+    content += f'''# Step 11: Language-Specific Runtime & Env (Go)
 # Go toolchain (multi-arch: amd64 + arm64)
 ENV GOPATH=/saved/ENV
 ENV GOMODCACHE=/saved/ENV/pkg/mod
 ENV PATH="/usr/local/go/bin:/saved/ENV/bin:$PATH"
-
+''' + SSL_CERT_ENV + '''
 RUN ARCH=$(uname -m) && \\
     case "$ARCH" in \\
         x86_64)  GOARCH=amd64 ;; \\
@@ -521,13 +628,15 @@ def generate_node_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("JavaScript", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    # Build tools for native modules (needed before Node install)
-    extra_deps = "python3 build-essential"
+    # Additional build tools for native modules (needed before Node install)
+    extra_deps = "python3"
     if needs_java:
         extra_deps += " default-jre-headless"
 
-    content += f'''# Build tools for native modules
+    content += f'''# Step 11: Language-Specific Runtime & Env (Node.js)
+# Additional build tools for native modules
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     {extra_deps} \\
     && rm -rf /var/lib/apt/lists/*
@@ -607,8 +716,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_{node_version}.x | bash - \\
 
     content += '''ENV NODE_PATH=/app/repo/node_modules
 ENV PATH="/app/repo/node_modules/.bin:$PATH"
-
-'''
+''' + SSL_CERT_ENV
 
     content += _clone_repo()
 
@@ -803,8 +911,9 @@ def generate_java_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("Java", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    content += f'''# Java toolchain (Java {java_version}, multi-arch: amd64 + arm64)
+    content += f'''# Step 11: Language-Specific Runtime & Env (Java)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     {jdk_package} maven \\
     && rm -rf /var/lib/apt/lists/*
@@ -820,8 +929,7 @@ RUN ARCH=$(dpkg --print-architecture) && \\
 ENV JAVA_HOME=/usr/lib/jvm/java-{java_version_num}-openjdk
 ENV MAVEN_OPTS="-Dmaven.repo.local=/saved/ENV/m2/repository"
 ENV PATH="$JAVA_HOME/bin:$PATH"
-
-'''
+''' + SSL_CERT_ENV
 
     content += _clone_repo()
 
@@ -872,8 +980,9 @@ def generate_csharp_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("C#", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    content += '''# .NET SDK
+    content += '''# Step 11: Language-Specific Runtime & Env (C#/.NET)
 RUN apt-get update && apt-get install -y --no-install-recommends apt-transport-https \\
     && rm -rf /var/lib/apt/lists/*
 
@@ -883,7 +992,7 @@ RUN curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-micro
 RUN apt-get update && apt-get install -y --no-install-recommends dotnet-sdk-8.0 \\
     && rm -rf /var/lib/apt/lists/*
 
-'''
+''' + SSL_CERT_ENV
 
     content += _clone_repo()
 
@@ -933,17 +1042,19 @@ def generate_ruby_dockerfile(
         except Exception:
             pass
 
-    pkg_list = ["ruby-full", "ruby-dev", "build-essential", "cmake",
+    pkg_list = ["ruby-full", "ruby-dev", "cmake",
                 "libffi-dev", "libssl-dev", "libyaml-dev", "zlib1g-dev"] + extra_pkgs
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("Ruby", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    content += f'''# Ruby toolchain
+    content += f'''# Step 11: Language-Specific Runtime & Env (Ruby)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     {" ".join(pkg_list)} \\
     && rm -rf /var/lib/apt/lists/*
 
+''' + SSL_CERT_ENV + '''
 RUN gem install bundler -v '~> 2.0' --no-document
 
 '''
@@ -978,29 +1089,54 @@ def generate_nix_rust_dockerfile(
     workdir = f"/app/repo/{subdir}" if subdir else "/app/repo"
     default_repo_url = repo_url if repo_url else DOCKER_DEFAULT_REPO_URL
 
-    content = f'''# syntax=docker/dockerfile:1
+    content = f'''# Step 1: Syntax & Base Image (DOCKERFILE_STEPS.md)
+# syntax=docker/dockerfile:1.6
 # {repo_name} @ {base_commit[:12] if base_commit else "HEAD"}
 
 FROM nixos/nix:latest
 
+# Step 2: Build Arguments (ARGs)
 ARG REPO_URL={default_repo_url}
 ARG BASE_COMMIT
 ARG JOBS={DOCKER_BUILD_JOBS}
 ARG BUILD_DATE
+ARG MITM_PROXY_PORT
+ARG MITM_PROXY_URL
+ARG MITM_DATA_DIR
+ARG MITM_CONTAINER_NAME
+ARG MITM_CA_CERT
+ARG COMBINED_CA_BUNDLE
+ARG MITM_CA_CERT_CONTENT
 
+# Step 3: Image Labels (OCI metadata)
 LABEL org.opencontainers.image.title="{repo_name or 'pr-eval'}" \\
-      org.opencontainers.image.description="Jaeger project Docker image (NixOS)" \\
+      org.opencontainers.image.description="{repo_name or 'pr-eval'} Docker image (NixOS) with MITM proxy support" \\
       org.opencontainers.image.version="1.0.0" \\
       org.opencontainers.image.created="${{BUILD_DATE}}" \\
       org.opencontainers.image.revision="{base_commit}" \\
       org.opencontainers.image.source="{repo_url}" \\
       org.opencontainers.image.authors="{DOCKER_IMAGE_AUTHORS}"
 
-RUN mkdir -p /etc/nix && echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
-RUN mkdir -p /app/repo /saved/ENV /workspace
+# Step 6: Proxy Environment
+ENV http_proxy="" \\
+    https_proxy="" \\
+    HTTP_PROXY="" \\
+    HTTPS_PROXY="" \\
+    no_proxy="localhost,127.0.0.1,::1" \\
+    NO_PROXY="localhost,127.0.0.1,::1"
 
+# Step 9: Application & Workspace Directories
+RUN mkdir -p /etc/nix && echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
+RUN mkdir -p /app/repo /saved/ENV /workspace \\
+    && mkdir -p /swe_util/eval_data/instances /swe_util/eval_data/testbeds \\
+    && mkdir -p /openhands/logs
+
+# Step 11: Language-Specific Runtime & Env (Rust via Nix)
 RUN nix-channel --update
 RUN nix profile install nixpkgs#rustup nixpkgs#pkg-config nixpkgs#python3 nixpkgs#gcc nixpkgs#openssl || true
+
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \\
+    SSL_CERT_DIR=/etc/ssl/certs
 
 RUN rustup default stable && rustup component add rustfmt clippy || true
 
@@ -1008,9 +1144,14 @@ RUN git config --global user.name "evaluation" \\
     && git config --global user.email "eval@localhost" \\
     && git config --global --add safe.directory /app/repo
 
+# Step 12: Clone Repo & Checkout
 RUN git clone --filter=blob:none "${{REPO_URL}}" /app/repo \\
     && cd /app/repo && git checkout "${{BASE_COMMIT}}"
 
+# Step 13: Testbed Symlink
+RUN ln -sf /app/repo /testbed
+
+# Step 14: Working Directory
 WORKDIR {workdir}
 
 RUN cargo fetch --locked 2>/dev/null || cargo fetch || true
@@ -1018,7 +1159,7 @@ RUN cargo build -j $JOBS 2>/dev/null || cargo build || true
 
 RUN cd /app/repo && git checkout -- . 2>/dev/null || true
 
-CMD ["/bin/bash"]
+# Step 15: Entry point is repo-specific; set CMD/ENTRYPOINT at build time or when running the container.
 '''
 
     dockerfile_path = repo_path / "Dockerfile.pr-eval"
@@ -1115,12 +1256,13 @@ def generate_php_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("PHP", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
     # Determine the vendor/bin path based on subdirectory
     vendor_path = f"/app/repo/{php_subdir}/vendor/bin" if php_subdir else "/app/repo/vendor/bin"
     
     # Use ondrej/php PPA for specific PHP versions
-    content += f'''# PHP toolchain (using ondrej/php PPA for version control)
+    content += f'''# Step 11: Language-Specific Runtime & Env (PHP)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     software-properties-common gnupg2 \\
     && add-apt-repository -y ppa:ondrej/php \\
@@ -1138,8 +1280,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 ENV COMPOSER_ALLOW_SUPERUSER=1
 ENV PATH="{vendor_path}:$PATH"
-
-'''
+''' + SSL_CERT_ENV
 
     content += _clone_repo()
 
@@ -1203,10 +1344,11 @@ def generate_c_dockerfile(
 
     content = _dockerfile_header(repo_name, base_commit, repo_url)
     content += _base_stage("C", repo_url, base_commit, repo_name)
+    content += _build_tools()
 
-    # Base C/C++ build tools
+    # Additional C/C++ build tools
     build_packages = [
-        "build-essential", "gcc", "g++", "make", "autoconf", "automake",
+        "make", "autoconf", "automake",
         "libtool", "pkg-config", "bison", "flex", "gperf",
         # Common libraries
         "libssl-dev", "libreadline-dev", "zlib1g-dev", "libyaml-dev",
@@ -1225,12 +1367,12 @@ def generate_c_dockerfile(
     if has_rust:
         build_packages.extend(["rustc", "cargo"])
 
-    content += f'''# C/C++ build toolchain
+    content += f'''# Step 11: Language-Specific Runtime & Env (C/C++)
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     {" ".join(build_packages)} \\
     && rm -rf /var/lib/apt/lists/*
 
-'''
+''' + SSL_CERT_ENV
 
     content += _clone_repo()
 
@@ -1394,13 +1536,169 @@ def generate_dockerfile(
 
 
 def setup_buildx_builder(logger: logging.Logger) -> bool:
-    """Buildx setup (no-op for single-arch builds)."""
-    return False
+    """Ensure a buildx builder exists and is ready."""
+    logger.info(f"Ensuring buildx builder '{DOCKER_BUILDX_BUILDER_NAME}' is ready")
+
+    # Reuse builder if it exists; otherwise create it.
+    inspect_exit, _, _ = run_command(
+        ["docker", "buildx", "inspect", DOCKER_BUILDX_BUILDER_NAME],
+        logger=logger,
+        timeout=60
+    )
+    if inspect_exit != 0:
+        create_exit, _, create_err = run_command(
+            [
+                "docker", "buildx", "create",
+                "--name", DOCKER_BUILDX_BUILDER_NAME,
+                "--driver", "docker-container",
+                "--use"
+            ],
+            logger=logger,
+            timeout=120
+        )
+        if create_exit != 0:
+            logger.error(f"Failed to create buildx builder: {create_err}")
+            return False
+    else:
+        use_exit, _, use_err = run_command(
+            ["docker", "buildx", "use", DOCKER_BUILDX_BUILDER_NAME],
+            logger=logger,
+            timeout=60
+        )
+        if use_exit != 0:
+            logger.error(f"Failed to select buildx builder: {use_err}")
+            return False
+
+    bootstrap_exit, _, bootstrap_err = run_command(
+        ["docker", "buildx", "inspect", DOCKER_BUILDX_BUILDER_NAME, "--bootstrap"],
+        logger=logger,
+        timeout=180
+    )
+    if bootstrap_exit != 0:
+        logger.error(f"Failed to bootstrap buildx builder: {bootstrap_err}")
+        return False
+
+    return True
 
 
 def cleanup_buildx_builder(logger: logging.Logger) -> None:
-    """Buildx cleanup (no-op for single-arch builds)."""
-    pass
+    """No-op: keep builder for reuse to avoid startup cost."""
+    return
+
+
+def _export_multiarch_oci_archive(
+    repo_path: Path,
+    tar_file: Path,
+    logger: logging.Logger,
+    base_commit: str,
+    repo_url: str,
+    no_cache: bool = False,
+    platforms: Optional[list] = None
+) -> bool:
+    """
+    Export a real multi-arch OCI archive tar using buildx.
+
+    This keeps the regular local `docker build` image for test execution, but
+    exports the artifact tar as multi-platform (amd64 + arm64).
+    """
+    if not setup_buildx_builder(logger):
+        return False
+
+    dockerfile = repo_path / "Dockerfile.pr-eval"
+    if not dockerfile.exists():
+        logger.error(f"Dockerfile not found for multi-arch export: {dockerfile}")
+        return False
+
+    target_platforms = platforms or DOCKER_TARGET_PLATFORMS
+    platform_arg = ",".join(target_platforms)
+
+    cmd = [
+        "docker", "buildx", "build",
+        "--builder", DOCKER_BUILDX_BUILDER_NAME,
+        "--platform", platform_arg,
+        "-f", str(dockerfile),
+        "--build-arg", f"REPO_URL={repo_url}",
+        "--build-arg", f"BASE_COMMIT={base_commit}",
+        "--build-arg", f"JOBS={DOCKER_BUILD_JOBS}",
+        # Avoid extra attestation-only descriptors (unknown/unknown manifests).
+        "--provenance=false",
+        "--sbom=false",
+        "--output", f"type=oci,dest={tar_file}",
+        ".",
+    ]
+    if no_cache:
+        cmd.insert(3, "--no-cache")
+
+    logger.info(f"Exporting multi-arch OCI archive for platforms: {platform_arg}")
+    exit_code, stdout, stderr = run_command(
+        cmd, cwd=repo_path, logger=logger, timeout=3600
+    )
+    if exit_code != 0:
+        logger.error(f"Multi-arch OCI export failed (exit {exit_code})")
+        if stderr:
+            logger.error(f"stderr:\n{stderr[-3000:]}")
+        if stdout:
+            logger.debug(f"stdout:\n{stdout[-3000:]}")
+        return False
+
+    return True
+
+
+def _validate_multiarch_oci_archive(
+    tar_file: Path,
+    required_platforms: list,
+    logger: logging.Logger
+) -> bool:
+    """
+    Validate that an OCI archive contains all required runnable platforms.
+
+    The archive must contain at least one manifest per required os/arch pair.
+    """
+    required = set()
+    for p in required_platforms:
+        if "/" in p:
+            os_name, arch = p.split("/", 1)
+            required.add((os_name, arch))
+
+    found = set()
+    try:
+        with tarfile.open(tar_file, "r") as tf:
+            names = set(tf.getnames())
+            if "index.json" not in names:
+                logger.error("OCI archive validation failed: missing index.json")
+                return False
+
+            index_obj = json.load(tf.extractfile("index.json"))
+            manifests = index_obj.get("manifests", [])
+
+            # Resolve one nested index level if needed.
+            if len(manifests) == 1 and manifests[0].get("mediaType", "").endswith("image.index.v1+json"):
+                digest = manifests[0].get("digest", "")
+                if ":" in digest:
+                    algo, hexv = digest.split(":", 1)
+                    nested_path = f"blobs/{algo}/{hexv}"
+                    if nested_path in names:
+                        nested_obj = json.load(tf.extractfile(nested_path))
+                        manifests = nested_obj.get("manifests", manifests)
+
+            for m in manifests:
+                platform = m.get("platform") or {}
+                os_name = platform.get("os")
+                arch = platform.get("architecture")
+                if os_name and arch and os_name != "unknown" and arch != "unknown":
+                    found.add((os_name, arch))
+    except Exception as e:
+        logger.error(f"OCI archive validation failed: {e}")
+        return False
+
+    missing = sorted(required - found)
+    if missing:
+        logger.error(f"OCI archive missing required platforms: {missing}")
+        logger.error(f"OCI archive contains platforms: {sorted(found)}")
+        return False
+
+    logger.info(f"Validated multi-arch OCI archive platforms: {sorted(found)}")
+    return True
 
 
 def build_docker_image(
@@ -1520,7 +1818,9 @@ def save_and_compress_image(
     logger: logging.Logger,
     repo_full_name: Optional[str] = None,
     repo_path: Optional[Path] = None,
-    save_dockerfile: bool = True
+    save_dockerfile: bool = True,
+    use_multiarch: Optional[bool] = None,
+    platforms: Optional[list] = None
 ) -> Optional[str]:
     """
     Save Docker image to tar file.
@@ -1551,15 +1851,51 @@ def save_and_compress_image(
         tar_file = output_dir / f"base-{base_commit}.tar"
         df_dest = output_dir / f"base-{base_commit}.Dockerfile"
 
-    # Save image
-    exit_code, _, stderr = run_command(
-        ["docker", "save", "-o", str(tar_file), image_tag],
-        logger=logger, timeout=1800
-    )
+    multiarch_enabled = DOCKER_USE_MULTIARCH if use_multiarch is None else bool(use_multiarch)
 
-    if exit_code != 0:
-        logger.error(f"Save failed: {stderr}")
-        return None
+    if multiarch_enabled:
+        if not repo_path:
+            logger.error("Cannot export multi-arch image without repo_path")
+            return None
+
+        # Match the same repo URL semantics as build_docker_image().
+        if repo_full_name:
+            repo_url = f"https://github.com/{repo_full_name}.git"
+        else:
+            exit_code, stdout, stderr = run_command(
+                ["git", "remote", "get-url", "origin"],
+                cwd=repo_path,
+                logger=logger
+            )
+            if exit_code != 0:
+                logger.error(f"Unable to determine repo URL for multi-arch export: {stderr}")
+                return None
+            repo_url = stdout.strip()
+
+        ok = _export_multiarch_oci_archive(
+            repo_path=repo_path,
+            tar_file=tar_file,
+            logger=logger,
+            base_commit=base_commit,
+            repo_url=repo_url,
+            platforms=platforms
+        )
+        if not ok:
+            return None
+
+        required_platforms = platforms or DOCKER_TARGET_PLATFORMS
+        if not _validate_multiarch_oci_archive(tar_file, required_platforms, logger):
+            logger.error("Multi-arch export produced invalid archive; failing fast.")
+            return None
+    else:
+        # Legacy single-arch export path.
+        exit_code, _, stderr = run_command(
+            ["docker", "save", "-o", str(tar_file), image_tag],
+            logger=logger, timeout=1800
+        )
+        if exit_code != 0:
+            logger.error(f"Save failed: {stderr}")
+            return None
 
     size_mb = tar_file.stat().st_size / (1024 * 1024)
     logger.info(f"Saved: {size_mb:.1f} MB")

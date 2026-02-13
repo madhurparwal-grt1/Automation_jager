@@ -139,6 +139,22 @@ class FileDiff:
     def is_mixed_file(self) -> bool:
         """Check if this file has both test and code hunks."""
         return self.has_test_hunks() and self.has_code_hunks()
+
+    def ordered_header_lines(self) -> List[str]:
+        """
+        Return diff header lines in git-compatible order.
+
+        Git expects:
+        1) `diff --git ...`
+        2) extended header lines (mode/index/rename metadata)
+        3) `---` / `+++` file markers
+        """
+        if not self.header_lines:
+            return self.extended_header.copy()
+
+        first = self.header_lines[:1]
+        rest = self.header_lines[1:]
+        return first + self.extended_header + rest
     
     def to_patch_string(self, include_types: Optional[Set[HunkType]] = None) -> str:
         """
@@ -162,13 +178,12 @@ class FileDiff:
         # For binary files, we can't split hunks
         if self.is_binary:
             if include_types is None:
-                return '\n'.join(self.header_lines + self.extended_header)
+                return '\n'.join(self.ordered_header_lines())
             # For binary files, we need to decide: include all or nothing
             # Check if any hunk type matches (binary files have no real hunks)
-            return '\n'.join(self.header_lines + self.extended_header)
+            return '\n'.join(self.ordered_header_lines())
         
-        lines = self.header_lines.copy()
-        lines.extend(self.extended_header)
+        lines = self.ordered_header_lines()
         
         for hunk in hunks_to_include:
             lines.append(hunk.header)
@@ -489,6 +504,51 @@ def detect_language_from_filepath(filepath: str) -> Optional[str]:
     return None
 
 
+def is_test_filepath(filepath: str) -> bool:
+    """
+    Check whether a path should be treated as a test file.
+
+    This is intentionally path-first (e.g. src/test, tests, __tests__) so that
+    test fixtures and helper files in test directories are classified as tests
+    even when individual hunks do not contain explicit test syntax.
+    """
+    filepath_lower = filepath.lower()
+
+    test_path_patterns = [
+        r'(^|/)src/test(/|$)',
+        r'(^|/)tests?(/|$)',
+        r'(^|/)spec(/|$)',
+        r'(^|/)__tests__(/|$)',
+        r'(^|/)testdata(/|$)',
+        r'(^|/)test_data(/|$)',
+        r'(^|/)fixtures?(/|$)',
+    ]
+
+    test_name_patterns = [
+        r'_test\.[^/]+$',
+        r'_spec\.[^/]+$',
+        r'\.test\.[^/]+$',
+        r'\.spec\.[^/]+$',
+        r'test_[^/]+\.[^/]+$',
+        r'[^/]*test\.java$',
+        r'[^/]*tests\.java$',
+        r'[^/]*it\.java$',
+        r'[^/]*test\.kt$',
+        r'[^/]*test\.scala$',
+        r'[^/]*spec\.scala$',
+    ]
+
+    for pattern in test_path_patterns:
+        if re.search(pattern, filepath_lower):
+            return True
+
+    for pattern in test_name_patterns:
+        if re.search(pattern, filepath_lower):
+            return True
+
+    return False
+
+
 def classify_hunk(
     hunk: DiffHunk,
     language: str,
@@ -591,12 +651,20 @@ def classify_file_hunks(
     # Auto-detect language if not provided
     if language is None:
         language = detect_language_from_filepath(file_diff.filepath)
+
+    # Path-level signal: files in test directories should default to TEST
+    # unless content classification already marks them as TEST/MIXED.
+    file_is_test_path = is_test_filepath(file_diff.filepath)
     
     if language is None:
         # Can't classify without knowing the language
         for hunk in file_diff.hunks:
-            hunk.hunk_type = HunkType.UNKNOWN
-            hunk.confidence = 0.0
+            if file_is_test_path:
+                hunk.hunk_type = HunkType.TEST
+                hunk.confidence = 0.6
+            else:
+                hunk.hunk_type = HunkType.UNKNOWN
+                hunk.confidence = 0.0
         return file_diff
     
     # Special handling for Rust: track if we're inside a #[cfg(test)] block
@@ -606,6 +674,17 @@ def classify_file_hunks(
         # Standard classification for other languages
         for hunk in file_diff.hunks:
             classify_hunk(hunk, language, logger=logger)
+            if file_is_test_path and hunk.hunk_type in (HunkType.CODE, HunkType.UNKNOWN):
+                # Default to TEST for test-path files when content-based signals are weak.
+                hunk.hunk_type = HunkType.TEST
+                hunk.confidence = max(hunk.confidence, 0.6)
+
+    # Apply the same defaulting behavior to Rust after its specialized pass.
+    if language == 'rust' and file_is_test_path:
+        for hunk in file_diff.hunks:
+            if hunk.hunk_type in (HunkType.CODE, HunkType.UNKNOWN):
+                hunk.hunk_type = HunkType.TEST
+                hunk.confidence = max(hunk.confidence, 0.6)
     
     return file_diff
 
@@ -745,7 +824,7 @@ def reconstruct_patch(
             # Include binary files in the patch if we're including CODE hunks
             # (This is a policy decision - binary files are typically "code")
             if HunkType.CODE in include_types or HunkType.UNKNOWN in include_types:
-                patch_parts.append('\n'.join(file_diff.header_lines + file_diff.extended_header))
+                patch_parts.append('\n'.join(file_diff.ordered_header_lines()))
             continue
         
         # Reconstruct file patch with only matching hunks
@@ -774,8 +853,7 @@ def _reconstruct_file_patch(
     if not hunks:
         return ""
     
-    lines = file_diff.header_lines.copy()
-    lines.extend(file_diff.extended_header)
+    lines = file_diff.ordered_header_lines()
     
     for hunk in hunks:
         lines.append(hunk.header)

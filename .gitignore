@@ -1,0 +1,13 @@
+# Generated evaluation outputs (local artifacts only)
+Output_dataset/
+output_dataset/
+**/Output_dataset/
+**/output_dataset/
+f2p_finder_data/
+F2P_finder_data/
+**/f2p_finder_data/
+**/F2P_finder_data/
+
+# OS metadata
+.DS_Store
+**/.DS_Store

@@ -6,7 +6,7 @@ Utility functions for multi-architecture Docker image builds.
 
 ## Overview
 
-This package provides shared utility functions used by `build_universal_image.py` and other multi-architecture build workflows. It includes command execution helpers with logging, error handling, and output capture.
+This package provides command execution helpers for multi-architecture build workflows, with logging, error handling, and output capture.
 
 ## Module Structure
 
@@ -54,7 +54,7 @@ Same parameters as `run_command()`, but always captures output and returns the s
 
 ## Usage with build_universal_image.py
 
-The `build_universal_image.py` script at the project root uses these utilities (via `automation_script.utils`) for Docker and Buildx operations:
+The `build_universal_image.py` script at the project root currently imports equivalent helpers from `automation_script.utils` for Docker and Buildx operations:
 
 ```bash
 python3 build_universal_image.py \

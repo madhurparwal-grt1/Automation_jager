@@ -504,6 +504,26 @@ def run_part2(workspace_root: str, keep_repo: bool = False, cleanup_images: bool
                 "This usually means the test command failed before any tests ran (e.g. missing deps, wrong command).",
                 base_ran, pr_ran
             )
+            
+            # Fail if Run 3 (FULL PATCH) produced zero tests with non-zero exit code
+            pr_exit_code = pr_result_dict.get("exit_code", -1)
+            if pr_ran == 0 and pr_exit_code != 0:
+                logger.error("")
+                logger.error("=" * 80)
+                logger.error("PART 2 FAILED: Zero tests ran in Run 3 (FULL PATCH)")
+                logger.error("=" * 80)
+                logger.error("The patched test run failed before any tests could execute.")
+                logger.error(f"Exit code: {pr_exit_code}")
+                logger.error("")
+                logger.error("This usually means:")
+                logger.error("  1. The patch introduces build errors")
+                logger.error("  2. Dependencies are missing or incompatible")
+                logger.error("  3. The test command is incorrect")
+                logger.error("")
+                logger.error("Check the artifacts/pr/ directory for detailed logs.")
+                logger.error("=" * 80)
+                return 1
+                
         if len(fail_to_pass) == 0:
             logger.warning("⚠️  No FAIL_TO_PASS tests found")
         logger.info("")

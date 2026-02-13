@@ -43,7 +43,8 @@ from .docker_healing import (
     should_retry_test_execution,
     apply_docker_build_healing,
     apply_test_execution_healing,
-    analyze_test_stability
+    analyze_test_stability,
+    is_zero_tests_error
 )
 from .utils import run_command
 from .cleanup import safe_rmtree
@@ -711,7 +712,11 @@ def run_part1(pr_url: str, output_dataset_root: str, overrides: dict = None, log
 
             if base_result is None:
                 logger.error("BASE tests did not produce results after all retry attempts")
-                # Don't fail - continue to save state
+                logger.error("")
+                logger.error("=" * 80)
+                logger.error("PART 1 FAILED: No test results produced")
+                logger.error("=" * 80)
+                return (1, str(workspace_path))
             else:
                 logger.info("")
                 logger.info("=" * 80)
@@ -732,6 +737,27 @@ def run_part1(pr_url: str, output_dataset_root: str, overrides: dict = None, log
                     logger.info("✓ No environment errors detected")
 
                 logger.info("=" * 80)
+                
+                # CRITICAL CHECK: Fail if zero tests ran (indicates build/environment failure)
+                total_tests = len(base_result.tests_passed) + len(base_result.tests_failed) + len(base_result.tests_skipped)
+                if total_tests == 0 and base_result.exit_code != 0:
+                    logger.error("")
+                    logger.error("=" * 80)
+                    logger.error("PART 1 FAILED: Zero tests ran")
+                    logger.error("=" * 80)
+                    logger.error("No tests were executed. This indicates a build or environment failure.")
+                    logger.error(f"Exit code: {base_result.exit_code}")
+                    if error_type:
+                        logger.error(f"Error type: {error_type}")
+                    logger.error("")
+                    logger.error("TROUBLESHOOTING:")
+                    logger.error("  1. Check the test command - it may be incorrect")
+                    logger.error(f"     Current: {test_command}")
+                    logger.error("  2. Check if the project has special build requirements")
+                    logger.error("  3. Try overriding with --test-cmd '<command>'")
+                    logger.error("  4. Check Docker build logs for clues")
+                    logger.error("=" * 80)
+                    return (1, str(workspace_path))
         logger.info("")
 
         # ========== Save state for Part 2 ==========

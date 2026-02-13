@@ -154,6 +154,32 @@ def detect_test_error_type(test_result: TestResult) -> Optional[str]:
     # Already has error type
     if test_result.error_type:
         return test_result.error_type
+    
+    # CRITICAL CHECK: Zero tests ran - this is always an environment/build error
+    # This must be checked early as it indicates something is fundamentally broken
+    total_tests = len(test_result.tests_passed) + len(test_result.tests_failed) + len(test_result.tests_skipped)
+    if total_tests == 0 and test_result.exit_code != 0:
+        # Try to identify the specific cause
+        if 'maven' in combined or 'mvn' in combined:
+            if 'compilation failure' in combined or 'compile failure' in combined:
+                return "zero_tests_compilation_error"
+            if 'cannot resolve dependencies' in combined or 'could not find artifact' in combined:
+                return "zero_tests_dependency_error"
+            return "zero_tests_maven_error"
+        if 'gradle' in combined:
+            if 'compilejava failed' in combined or 'compilation failed' in combined:
+                return "zero_tests_compilation_error"
+            return "zero_tests_gradle_error"
+        if 'cargo' in combined or 'rustc' in combined:
+            return "zero_tests_rust_error"
+        if 'npm' in combined or 'yarn' in combined or 'node' in combined:
+            return "zero_tests_node_error"
+        if 'pytest' in combined or 'python' in combined:
+            return "zero_tests_python_error"
+        if 'go test' in combined or 'go build' in combined:
+            return "zero_tests_go_error"
+        # Generic zero tests error
+        return "zero_tests_unknown_error"
 
     # Check for Nix-specific libraries first (these require Nix, not apt)
     # These are NOT retriable as they need a completely different build environment
@@ -326,6 +352,7 @@ def is_retriable_error(error_type: Optional[str]) -> bool:
         'requires_nix_package_manager',  # Needs Nix, not apt - can't be healed
         'compilation_error',  # Code issues, not environment
         'unknown_error',  # Can't determine how to fix
+        'zero_tests_compilation_error',  # Code compilation issues - can't be fixed by healing
     }
     
     if error_type in non_retriable:
@@ -348,9 +375,33 @@ def is_retriable_error(error_type: Optional[str]) -> bool:
         'rust_unstable_feature_error',  # Can be healed by switching to nightly
         'rust_version_mismatch',  # Can be healed by using appropriate Rust version
         'missing_system_library',  # Can be healed by adding system packages to Dockerfile
+        # Zero tests errors - attempt healing by rebuilding/fixing deps
+        'zero_tests_maven_error',  # Maven build issues - try healing
+        'zero_tests_dependency_error',  # Dependency resolution issues
+        'zero_tests_gradle_error',  # Gradle build issues
+        'zero_tests_rust_error',  # Rust build issues
+        'zero_tests_node_error',  # Node/npm build issues
+        'zero_tests_python_error',  # Python import/setup issues
+        'zero_tests_go_error',  # Go build issues
+        'zero_tests_unknown_error',  # Try generic healing
     }
 
     return error_type in retriable
+
+
+def is_zero_tests_error(error_type: Optional[str]) -> bool:
+    """
+    Check if the error indicates zero tests ran.
+    
+    Args:
+        error_type: Error type string
+        
+    Returns:
+        True if this is a zero tests error
+    """
+    if not error_type:
+        return False
+    return error_type.startswith('zero_tests_')
 
 
 # =============================================================================
@@ -916,6 +967,131 @@ def _heal_rust_nightly_requirement(repo_path: Path, logger: logging.Logger) -> b
         return False
 
 
+def _heal_zero_tests_error(
+    repo_path: Path,
+    language: str,
+    attempt: int,
+    error_type: str,
+    test_result: TestResult,
+    logger: logging.Logger
+) -> Dict[str, Any]:
+    """
+    Attempt to heal zero tests errors by applying various fixes.
+    
+    Args:
+        repo_path: Path to repository
+        language: Repository language
+        attempt: Attempt number (0-indexed)
+        error_type: Specific zero tests error type
+        test_result: Previous test result
+        logger: Logger instance
+        
+    Returns:
+        Dict of modifications for next attempt
+    """
+    modifications = {}
+    error_output = test_result.stdout + test_result.stderr
+    error_lower = error_output.lower()
+    
+    logger.info(f"Analyzing zero tests error: {error_type}")
+    
+    # Attempt 1: Check for missing dependencies and try to fix Dockerfile
+    if attempt == 0:
+        logger.info("Healing attempt 1: Checking for missing dependencies...")
+        
+        # Check for Maven dependency issues
+        if error_type in ["zero_tests_maven_error", "zero_tests_dependency_error"]:
+            # Check for common Maven issues in the output
+            if 'could not find artifact' in error_lower or 'cannot resolve dependencies' in error_lower:
+                logger.info("Detected Maven dependency resolution failure")
+                # Try rebuilding with fresh dependencies
+                modifications['rebuild_docker_image'] = True
+                modifications['force_dependency_refresh'] = True
+                logger.info("Will rebuild Docker image with fresh Maven dependencies")
+                return modifications
+            
+            # Check for missing JDK tools
+            if 'java.lang.noclassdeffounderror' in error_lower or 'classnotfoundexception' in error_lower:
+                logger.info("Detected missing Java class - may need different JDK version")
+                # Try to detect required Java version from error
+                if 'java 17' in error_lower or 'java/17' in error_lower:
+                    modifications['rebuild_docker_image'] = True
+                    modifications['java_version_hint'] = '17'
+                elif 'java 21' in error_lower or 'java/21' in error_lower:
+                    modifications['rebuild_docker_image'] = True
+                    modifications['java_version_hint'] = '21'
+                else:
+                    modifications['rebuild_docker_image'] = True
+                logger.info("Will rebuild Docker image with adjusted JDK")
+                return modifications
+        
+        # Check for Gradle issues
+        if error_type == "zero_tests_gradle_error":
+            if 'could not resolve' in error_lower or 'could not find' in error_lower:
+                logger.info("Detected Gradle dependency resolution failure")
+                modifications['rebuild_docker_image'] = True
+                modifications['force_dependency_refresh'] = True
+                return modifications
+        
+        # Generic: try rebuilding the image with --no-cache
+        logger.info("Triggering Docker image rebuild with no cache")
+        modifications['rebuild_docker_image'] = True
+        modifications['no_cache'] = True
+        return modifications
+    
+    # Attempt 2: Try different healing strategies
+    elif attempt == 1:
+        logger.info("Healing attempt 2: Trying alternative fixes...")
+        
+        # For Maven/Gradle: increase memory
+        if error_type in ["zero_tests_maven_error", "zero_tests_gradle_error", "zero_tests_dependency_error"]:
+            if 'outofmemoryerror' in error_lower or 'gc overhead' in error_lower:
+                logger.info("Detected memory issues - increasing heap size")
+                modifications['env_vars'] = {
+                    'MAVEN_OPTS': '-Xmx4g -XX:+UseG1GC',
+                    'GRADLE_OPTS': '-Xmx4g -XX:+UseG1GC',
+                }
+                modifications['rebuild_docker_image'] = True
+                return modifications
+        
+        # Check for network/proxy issues
+        if 'connection' in error_lower or 'timeout' in error_lower or 'proxy' in error_lower:
+            logger.info("Detected possible network issues - adding retry logic")
+            modifications['timeout_multiplier'] = 2.0
+            modifications['rebuild_docker_image'] = True
+            return modifications
+        
+        # Last resort: try a clean rebuild
+        logger.info("Trying clean Docker rebuild as last resort")
+        modifications['rebuild_docker_image'] = True
+        modifications['no_cache'] = True
+        modifications['clean_rebuild'] = True
+        return modifications
+    
+    # Attempt 3+: Mark as not healable
+    else:
+        logger.error("=" * 60)
+        logger.error("CANNOT HEAL: All healing attempts exhausted")
+        logger.error("=" * 60)
+        logger.error(f"Zero tests ran after {attempt + 1} attempts")
+        logger.error(f"Error type: {error_type}")
+        logger.error("")
+        logger.error("This usually means:")
+        logger.error("  1. The project has build configuration issues")
+        logger.error("  2. Dependencies cannot be resolved")
+        logger.error("  3. The test command is incorrect")
+        logger.error("  4. The Docker environment is incompatible")
+        logger.error("")
+        logger.error("Try manually:")
+        logger.error("  - Check the test command: is it correct?")
+        logger.error("  - Check build logs for specific errors")
+        logger.error("  - Try with --test-cmd to override the test command")
+        logger.error("=" * 60)
+        modifications['not_healable'] = True
+        modifications['error_reason'] = f"zero_tests_after_{attempt + 1}_attempts"
+        return modifications
+
+
 # =============================================================================
 # Test Execution Healing
 # =============================================================================
@@ -966,6 +1142,30 @@ def apply_test_execution_healing(
         modifications['not_healable'] = True
         modifications['error_reason'] = "requires_nix_package_manager"
         return modifications
+    
+    # Zero tests ran - compilation error (code issues, not environment)
+    if error_type == "zero_tests_compilation_error":
+        logger.error("=" * 60)
+        logger.error("CANNOT HEAL: Compilation error in source code")
+        logger.error("=" * 60)
+        logger.error("The code failed to compile. This is likely a code issue,")
+        logger.error("not an environment issue that can be fixed by healing.")
+        logger.error("")
+        logger.error("Possible causes:")
+        logger.error("  1. The PR is incompatible with the base commit")
+        logger.error("  2. Missing dependencies in the repository")
+        logger.error("  3. Breaking changes in dependencies")
+        logger.error("=" * 60)
+        modifications['not_healable'] = True
+        modifications['error_reason'] = "compilation_error_in_source"
+        return modifications
+    
+    # Zero tests ran - try to heal based on the specific error
+    if is_zero_tests_error(error_type):
+        logger.warning("=" * 60)
+        logger.warning(f"ZERO TESTS RAN - Attempting healing (attempt {attempt + 1})")
+        logger.warning("=" * 60)
+        return _heal_zero_tests_error(repo_path, language, attempt, error_type, test_result, logger)
 
     # Missing system library errors - requires Docker image rebuild with new packages
     if error_type == "missing_system_library":

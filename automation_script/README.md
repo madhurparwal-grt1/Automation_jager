@@ -15,23 +15,17 @@ python -m automation_script.main_orchestrator \
 
 ## Commands
 
-### Full Workflow
+### Full Workflow (single entrypoint)
 
 ```bash
 python -m automation_script.main_orchestrator <PR_URL> <OUTPUT_DIR>
 ```
 
-### Part 1 Only (Build + BASE Tests)
-
-```bash
-python -m automation_script.main_orchestrator --part1-only <PR_URL> <OUTPUT_DIR>
-```
-
-### Part 2 Only (Patch + Evaluate)
-
-```bash
-python -m automation_script.main_orchestrator --part2-only <WORKSPACE_PATH>
-```
+This command runs the complete evaluation flow end-to-end:
+- BASE checkout, image build, BASE test run
+- test-only patch validation run
+- full patch validation run
+- metadata and artifacts generation
 
 ## Options
 
@@ -46,8 +40,6 @@ python -m automation_script.main_orchestrator --part2-only <WORKSPACE_PATH>
 | `--skip-tests` | Skip test execution (only build artifacts) |
 | `--keep-repo` | Keep cloned repository after completion |
 | `--cleanup-images` | Remove Docker images after completion |
-| `--part1-only` | Run only Part 1 |
-| `--part2-only` | Run only Part 2 |
 
 ## Examples
 
@@ -101,24 +93,27 @@ python -m automation_script.main_orchestrator \
 Output_dataset/
 └── owner-repo_pr_NUMBER/
     ├── artifacts/
-    │   ├── base/           # BASE test results
-    │   └── pr/             # PR test results
+    │   ├── base/                 # BASE test results
+    │   ├── test_patch_only/      # Test-only patch validation run
+    │   └── pr/                   # Full-patch test results
     ├── docker_images/
     │   ├── owner_repo-COMMIT.tar        # Docker image
     │   └── owner_repo-COMMIT.Dockerfile # Generated Dockerfile
     ├── logs/
-    │   ├── part1_build_and_base.log
-    │   └── part2_patch_and_evaluate.log
+    │   └── workflow.log          # Unified workflow log
     ├── metadata/
-    │   └── task_instance.json  # Final metadata
+    │   ├── instance.json          # Main metadata object
+    │   └── swe-bench-instance.json # Array format for harnesses
     ├── patches/
-    │   └── pr.patch            # PR patch file
-    └── state.json              # State between Part 1 and Part 2
+    │   ├── pr.patch              # Full PR patch
+    │   ├── test.patch            # Test-only patch
+    │   └── code.patch            # Code-only patch
+    └── repo/                     # Cloned repository
 ```
 
 ## Two-Phase Pipeline
 
-### Part 1: Build + BASE Testing
+### Phase 1: Build + BASE Testing
 
 1. Clone repository
 2. Fetch PR refs
@@ -129,13 +124,12 @@ Output_dataset/
 7. Build Docker image
 8. Run BASE tests
 9. Save Docker image to tar
-10. Generate state.json
 
-### Part 2: Patch + Evaluate
+### Phase 2: Patch + Evaluate
 
-1. Load state from Part 1
-2. Generate PR patch
-3. Apply patch in container
+1. Generate patch files (full/test/code)
+2. Run TEST_PATCH_ONLY tests (new/changed tests should fail)
+3. Apply full patch in container
 4. Run PATCHED tests
 5. Compare results:
    - **FAIL_TO_PASS**: Tests that failed in BASE but pass after patch
@@ -303,9 +297,9 @@ python -m automation_script.main_orchestrator \
 
 ### Docker Build Fails
 
-1. Check logs: `<workspace>/logs/part1_build_and_base.log`
-2. Check Docker error: `<workspace>/repo/docker_build_error.log`
-3. Try with `--no-cache` (edit state.json and rerun)
+1. Check unified logs: `<workspace>/logs/workflow.log`
+2. Inspect build output around the `[STEP 5/10]` section
+3. Re-run with `--reuse-image <tag>` to skip rebuild if you have a valid cached image
 
 ### Shallow Clone Issues
 
@@ -315,11 +309,12 @@ python -m automation_script.main_orchestrator \
   <PR_URL> <OUTPUT_DIR>  # without --shallow-clone
 ```
 
-### Rerun Part 2 Only
+### Reuse Existing Docker Image
 
 ```bash
 python -m automation_script.main_orchestrator \
-  --part2-only ./Output_dataset/owner-repo_pr_123
+  --reuse-image pr-eval:pr-123-base-abc123 \
+  <PR_URL> <OUTPUT_DIR>
 ```
 
 ## Module Structure

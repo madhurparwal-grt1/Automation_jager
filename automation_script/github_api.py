@@ -251,7 +251,7 @@ def fetch_issue_description(
         logger: Logger instance
         
     Returns:
-        Issue description (title + body) or None if failed
+        Raw issue text (prefer body-only exact copy) or None if failed
     """
     try:
         url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
@@ -267,12 +267,10 @@ def fetch_issue_description(
         title = data.get("title", "")
         body = data.get("body", "")
         
-        if title and body:
-            description = f"{title}\n\n{body}"
+        if body:
+            description = body
         elif title:
             description = title
-        elif body:
-            description = body
         else:
             return None
         
@@ -328,8 +326,8 @@ def get_problem_statement(
     Get problem statement for metadata.
     
     Logic:
-    - For BUG FIX PRs (have linked issues): Use ALL linked ISSUE descriptions
-    - For FEATURE PRs (no linked issues): Use the PR description
+    - For BUG FIX PRs (have linked issues): Use ALL linked ISSUE descriptions as raw text
+    - For FEATURE PRs (no linked issues): Use PR body as raw text
     
     This ensures:
     - Bug fixes get the issue description(s) (what's broken from user perspective)
@@ -361,23 +359,19 @@ def get_problem_statement(
     if linked_issues:
         logger.info(f"PR references issues: {linked_issues} - treating as BUG FIX")
         
-        # Fetch ALL linked issue descriptions
+        # Fetch ALL linked issue descriptions without adding synthetic formatting.
         issue_descriptions = []
         for issue_number in linked_issues:
             issue_description = fetch_issue_description(repo, issue_number, logger)
             if issue_description:
-                # Add issue number as header for clarity when multiple issues
-                if len(linked_issues) > 1:
-                    issue_descriptions.append(f"## Issue #{issue_number}\n\n{issue_description}")
-                else:
-                    issue_descriptions.append(issue_description)
+                issue_descriptions.append(issue_description)
                 logger.info(f"Fetched issue #{issue_number} description")
             else:
                 logger.warning(f"Could not fetch issue #{issue_number}")
         
         if issue_descriptions:
-            # Combine all issue descriptions with separator
-            combined_description = "\n\n---\n\n".join(issue_descriptions)
+            # Keep text as close to source as possible; no markdown wrappers/separators.
+            combined_description = "\n\n".join(issue_descriptions)
             logger.info(f"Using {len(issue_descriptions)} issue description(s) as problem statement")
             return combined_description
         else:
@@ -385,13 +379,11 @@ def get_problem_statement(
     else:
         logger.info("No linked issues found - treating as FEATURE PR")
     
-    # Use PR description for features or as fallback
-    if title and body:
-        problem_statement = f"{title}\n\n{body}"
+    # Use PR body as primary source to preserve exact copy/paste text.
+    if body:
+        problem_statement = body
     elif title:
         problem_statement = title
-    elif body:
-        problem_statement = body
     else:
         problem_statement = f"PR #{pr_number} from {pr_url}"
 
