@@ -757,74 +757,80 @@ def get_patches(
     repo_path: Path,
     base_commit: str,
     pr_commit: str,
-    logger: logging.Logger
+    logger: logging.Logger,
+    language: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Generate code_patch and test_patch from git diff (for metadata).
     
-    Uses consistent file classification to ensure:
-    - patch: Contains ONLY code changes (no test files)
-    - test_patch: Contains ONLY test file changes
-    - No overlap between the two patches
-    - All changed files are in exactly one patch
+    Uses hunk-level analysis to properly separate:
+    - patch: Contains ONLY code changes (production code hunks)
+    - test_patch: Contains ONLY test changes (test code hunks)
+    
+    This handles languages where tests are embedded in the same file as
+    production code (e.g., Rust's #[cfg(test)], Python doctests).
 
     Args:
         repo_path: Path to cloned repository
         base_commit: Base commit SHA
         pr_commit: PR commit SHA
         logger: Logger instance
+        language: Optional language hint (auto-detected per file if None)
 
     Returns:
         Tuple of (code_patch, test_patch) - properly separated patches
     """
-    logger.info("Generating separated patches for metadata")
+    from .diff_parser import (
+        parse_diff,
+        classify_all_hunks,
+        reconstruct_patch,
+        get_patch_statistics,
+        HunkType
+    )
+    
+    logger.info("Generating separated patches using hunk-level analysis")
 
-    # Step 1: Get list of all changed files
-    exit_code, stdout, _ = run_command(
-        ["git", "diff", "--name-only", f"{base_commit}..{pr_commit}"],
-        cwd=repo_path,
+    # Step 1: Generate full diff
+    cmd = ["git", "diff", "--binary", "--full-index", f"{base_commit}..{pr_commit}"]
+    exit_code, full_diff, stderr = run_command(cmd, cwd=repo_path, logger=logger)
+    
+    if exit_code != 0:
+        logger.warning(f"Failed to generate diff: {stderr}")
+        return "", ""
+    
+    if not full_diff.strip():
+        logger.info("No changes found between commits")
+        return "", ""
+    
+    # Step 2: Parse diff into files and hunks
+    file_diffs = parse_diff(full_diff)
+    logger.debug(f"Parsed {len(file_diffs)} files from diff")
+    
+    # Step 3: Classify all hunks
+    classify_all_hunks(file_diffs, language, logger)
+    
+    # Log statistics
+    stats = get_patch_statistics(full_diff, language, logger)
+    logger.info(f"Hunk classification: {stats['test_hunks']} test, {stats['code_hunks']} code, "
+                f"{stats['mixed_hunks']} mixed, {stats['unknown_hunks']} unknown")
+    if stats['mixed_files']:
+        logger.info(f"Mixed files (inline tests): {len(stats['mixed_files'])} files")
+        for mf in stats['mixed_files'][:5]:  # Log first 5
+            logger.debug(f"  - {mf}")
+    
+    # Step 4: Generate code-only patch (CODE + UNKNOWN hunks)
+    code_patch = reconstruct_patch(
+        file_diffs,
+        include_types={HunkType.CODE, HunkType.UNKNOWN},
         logger=logger
     )
     
-    if exit_code != 0:
-        logger.warning("Failed to get list of changed files")
-        return "", ""
-    
-    all_files = [f.strip() for f in stdout.strip().split('\n') if f.strip()]
-    
-    if not all_files:
-        logger.info("No changed files found")
-        return "", ""
-    
-    # Step 2: Classify files using consistent logic
-    code_files = []
-    test_files = []
-    
-    for filepath in all_files:
-        if is_test_file(filepath):
-            test_files.append(filepath)
-        else:
-            code_files.append(filepath)
-    
-    logger.info(f"Classified {len(all_files)} files: {len(code_files)} code, {len(test_files)} test")
-    
-    # Step 3: Generate code-only patch
-    code_patch = ""
-    if code_files:
-        cmd = ["git", "diff", "--binary", "--full-index", f"{base_commit}..{pr_commit}", "--"]
-        cmd.extend(code_files)
-        exit_code, code_patch, _ = run_command(cmd, cwd=repo_path, logger=logger)
-        if exit_code != 0:
-            code_patch = ""
-    
-    # Step 4: Generate test-only patch
-    test_patch = ""
-    if test_files:
-        cmd = ["git", "diff", "--binary", "--full-index", f"{base_commit}..{pr_commit}", "--"]
-        cmd.extend(test_files)
-        exit_code, test_patch, _ = run_command(cmd, cwd=repo_path, logger=logger)
-        if exit_code != 0:
-            test_patch = ""
+    # Step 5: Generate test-only patch (TEST + MIXED hunks)
+    test_patch = reconstruct_patch(
+        file_diffs,
+        include_types={HunkType.TEST, HunkType.MIXED},
+        logger=logger
+    )
 
     logger.info(f"Generated patches: code={len(code_patch)} bytes, test={len(test_patch)} bytes")
     return code_patch, test_patch

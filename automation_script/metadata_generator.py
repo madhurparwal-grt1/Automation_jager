@@ -638,90 +638,157 @@ def generate_test_patch(
     repo_path: 'Path',
     base_commit: str,
     pr_commit: str,
-    logger: 'logging.Logger'
+    logger: 'logging.Logger',
+    language: Optional[str] = None
 ) -> str:
     """
-    Generate patch containing only test files.
+    Generate patch containing only test code.
     
-    Uses consistent file classification to ensure test files are properly
-    separated from code files with no overlap.
+    Uses hunk-level analysis to separate test code from production code.
+    This handles languages where tests are embedded in the same file as
+    production code (e.g., Rust's #[cfg(test)], Python doctests).
+
+    The process:
+    1. Generate full diff between commits
+    2. Parse diff into file diffs and individual hunks
+    3. Classify each hunk as test/code based on content patterns
+    4. Reconstruct patch with only test-related hunks
 
     Args:
         repo_path: Path to repository
         base_commit: BASE commit SHA
         pr_commit: PR commit SHA
         logger: Logger instance
+        language: Optional language hint (auto-detected per file if None)
 
     Returns:
-        Test-only patch as string
+        Test-only patch as string (may include hunks from mixed files)
     """
     from .git_operations import run_command
+    from .diff_parser import (
+        parse_diff,
+        classify_all_hunks,
+        reconstruct_patch,
+        get_patch_statistics,
+        HunkType,
+        INLINE_TEST_LANGUAGES
+    )
     
-    # Get classified files
-    _, test_files = classify_changed_files(repo_path, base_commit, pr_commit, logger)
-    
-    if not test_files:
-        logger.debug("No test files found in PR changes")
-        return ""
-    
-    # Generate diff for test files only
-    cmd = ["git", "diff", "--binary", "--full-index", base_commit, pr_commit, "--"]
-    cmd.extend(test_files)
-    
-    logger.debug(f"Generating test patch for {len(test_files)} test files")
-    
-    exit_code, stdout, stderr = run_command(cmd, cwd=repo_path, logger=logger)
+    # Step 1: Generate full diff
+    cmd = ["git", "diff", "--binary", "--full-index", base_commit, pr_commit]
+    exit_code, full_diff, stderr = run_command(cmd, cwd=repo_path, logger=logger)
     
     if exit_code != 0:
-        logger.warning(f"Failed to generate test patch: {stderr}")
+        logger.warning(f"Failed to generate diff: {stderr}")
         return ""
     
-    return stdout
+    if not full_diff.strip():
+        logger.debug("No changes between commits")
+        return ""
+    
+    # Step 2: Parse diff into files and hunks
+    file_diffs = parse_diff(full_diff)
+    logger.debug(f"Parsed {len(file_diffs)} files from diff")
+    
+    # Step 3: Classify all hunks
+    classify_all_hunks(file_diffs, language, logger)
+    
+    # Log statistics for debugging
+    stats = get_patch_statistics(full_diff, language, logger)
+    logger.info(f"Hunk classification: {stats['test_hunks']} test, {stats['code_hunks']} code, "
+                f"{stats['mixed_hunks']} mixed, {stats['unknown_hunks']} unknown")
+    if stats['mixed_files']:
+        logger.info(f"Mixed files (containing both test and code): {stats['mixed_files']}")
+    
+    # Step 4: Reconstruct test-only patch
+    # Include TEST and MIXED hunks (conservative: include borderline cases in test patch)
+    test_patch = reconstruct_patch(
+        file_diffs,
+        include_types={HunkType.TEST, HunkType.MIXED},
+        logger=logger
+    )
+    
+    logger.info(f"Generated test patch: {len(test_patch)} bytes "
+                f"({stats['test_hunks']} test + {stats['mixed_hunks']} mixed hunks)")
+    
+    return test_patch
 
 
 def generate_code_patch(
     repo_path: 'Path',
     base_commit: str,
     pr_commit: str,
-    logger: 'logging.Logger'
+    logger: 'logging.Logger',
+    language: Optional[str] = None
 ) -> str:
     """
-    Generate patch containing only code files (excluding test files).
+    Generate patch containing only production code (excluding test code).
     
-    Uses consistent file classification to ensure code files are properly
-    separated from test files with no overlap.
+    Uses hunk-level analysis to separate production code from test code.
+    This handles languages where tests are embedded in the same file as
+    production code (e.g., Rust's #[cfg(test)], Python doctests).
+
+    The process:
+    1. Generate full diff between commits
+    2. Parse diff into file diffs and individual hunks
+    3. Classify each hunk as test/code based on content patterns
+    4. Reconstruct patch with only code-related hunks
 
     Args:
         repo_path: Path to repository
         base_commit: BASE commit SHA
         pr_commit: PR commit SHA
         logger: Logger instance
+        language: Optional language hint (auto-detected per file if None)
 
     Returns:
-        Code-only patch as string (excluding test files)
+        Code-only patch as string (excluding test hunks)
     """
     from .git_operations import run_command
+    from .diff_parser import (
+        parse_diff,
+        classify_all_hunks,
+        reconstruct_patch,
+        get_patch_statistics,
+        HunkType
+    )
     
-    # Get classified files
-    code_files, _ = classify_changed_files(repo_path, base_commit, pr_commit, logger)
-    
-    if not code_files:
-        logger.debug("No code files found (all changes are test files)")
-        return ""
-    
-    logger.debug(f"Generating code patch for {len(code_files)} code files")
-    
-    # Generate diff for code files only
-    cmd_diff = ["git", "diff", "--binary", "--full-index", base_commit, pr_commit, "--"]
-    cmd_diff.extend(code_files)
-    
-    exit_code, stdout, stderr = run_command(cmd_diff, cwd=repo_path, logger=logger)
+    # Step 1: Generate full diff
+    cmd = ["git", "diff", "--binary", "--full-index", base_commit, pr_commit]
+    exit_code, full_diff, stderr = run_command(cmd, cwd=repo_path, logger=logger)
     
     if exit_code != 0:
-        logger.warning(f"Failed to generate code patch: {stderr}")
+        logger.warning(f"Failed to generate diff: {stderr}")
         return ""
     
-    return stdout
+    if not full_diff.strip():
+        logger.debug("No changes between commits")
+        return ""
+    
+    # Step 2: Parse diff into files and hunks
+    file_diffs = parse_diff(full_diff)
+    logger.debug(f"Parsed {len(file_diffs)} files from diff")
+    
+    # Step 3: Classify all hunks
+    classify_all_hunks(file_diffs, language, logger)
+    
+    # Log statistics for debugging
+    stats = get_patch_statistics(full_diff, language, logger)
+    logger.debug(f"Hunk classification: {stats['test_hunks']} test, {stats['code_hunks']} code, "
+                 f"{stats['mixed_hunks']} mixed, {stats['unknown_hunks']} unknown")
+    
+    # Step 4: Reconstruct code-only patch
+    # Include CODE and UNKNOWN hunks (default unknown to code)
+    code_patch = reconstruct_patch(
+        file_diffs,
+        include_types={HunkType.CODE, HunkType.UNKNOWN},
+        logger=logger
+    )
+    
+    logger.info(f"Generated code patch: {len(code_patch)} bytes "
+                f"({stats['code_hunks']} code + {stats['unknown_hunks']} unknown hunks)")
+    
+    return code_patch
 
 
 def validate_artifacts(artifacts_dir: Path, logger: logging.Logger) -> bool:
