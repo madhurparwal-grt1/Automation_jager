@@ -1,0 +1,25 @@
+# Python Dependencies for Automation_jager
+# 
+# This project primarily uses Python standard library modules.
+# Python 3.8 or higher is recommended.
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# Or with specific Python version:
+#   python3 -m pip install -r requirements.txt
+
+# No external Python packages required - all dependencies are in the standard library
+# The project uses:
+# - argparse (stdlib)
+# - json (stdlib)
+# - logging (stdlib)
+# - pathlib (stdlib)
+# - subprocess (stdlib)
+# - dataclasses (stdlib, Python 3.7+)
+# - typing (stdlib)
+# - urllib (stdlib)
+
+# However, if you need to ensure Python version compatibility:
+# Uncomment the following line if you're on Python < 3.8 and need dataclasses
+# dataclasses>=0.6; python_version < '3.7'

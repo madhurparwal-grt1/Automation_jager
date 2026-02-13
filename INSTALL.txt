@@ -1,0 +1,243 @@
+================================================================================
+INSTALLATION GUIDE - Automation_jager
+================================================================================
+
+This guide will help you install all dependencies needed to run the automation
+scripts in this project.
+
+================================================================================
+QUICK START
+================================================================================
+
+For automatic installation (recommended):
+
+    chmod +x install.sh
+    ./install.sh
+
+The script will:
+- Detect your operating system
+- Check for existing installations
+- Install missing dependencies
+- Configure everything automatically
+
+================================================================================
+MANUAL INSTALLATION
+================================================================================
+
+If you prefer to install dependencies manually, follow these steps:
+
+1. PYTHON 3.8+
+   -----------
+   macOS:
+     brew install python3
+   
+   Ubuntu/Debian:
+     sudo apt-get update
+     sudo apt-get install python3 python3-pip python3-venv
+   
+   Fedora/RHEL:
+     sudo dnf install python3 python3-pip
+   
+   Verify:
+     python3 --version  # Should be 3.8 or higher
+
+2. DOCKER
+   ------
+   macOS:
+     Download and install Docker Desktop from:
+     https://www.docker.com/products/docker-desktop/
+   
+   Ubuntu/Debian:
+     # Add Docker's official repository
+     sudo apt-get update
+     sudo apt-get install ca-certificates curl gnupg
+     sudo install -m 0755 -d /etc/apt/keyrings
+     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+       sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+     sudo chmod a+r /etc/apt/keyrings/docker.gpg
+     
+     echo \
+       "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] \
+       https://download.docker.com/linux/ubuntu \
+       "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
+       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+     
+     sudo apt-get update
+     sudo apt-get install docker-ce docker-ce-cli containerd.io \
+       docker-buildx-plugin docker-compose-plugin
+     
+     # Add your user to docker group
+     sudo usermod -aG docker $USER
+     newgrp docker
+   
+   Fedora/RHEL:
+     sudo dnf install dnf-plugins-core
+     sudo dnf config-manager --add-repo \
+       https://download.docker.com/linux/fedora/docker-ce.repo
+     sudo dnf install docker-ce docker-ce-cli containerd.io \
+       docker-buildx-plugin docker-compose-plugin
+     
+     sudo systemctl start docker
+     sudo systemctl enable docker
+     sudo usermod -aG docker $USER
+   
+   Verify:
+     docker --version
+     docker info
+
+3. DOCKER BUILDX
+   -------------
+   Usually installed with Docker. Verify with:
+     docker buildx version
+   
+   If not available:
+   Ubuntu/Debian:
+     sudo apt-get install docker-buildx-plugin
+   
+   macOS:
+     Included in Docker Desktop (update to latest version if missing)
+
+4. GITHUB CLI (OPTIONAL)
+   ---------------------
+   macOS:
+     brew install gh
+   
+   Ubuntu/Debian:
+     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+       sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+     echo "deb [arch=$(dpkg --print-architecture) \
+       signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
+       https://cli.github.com/packages stable main" | \
+       sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+     sudo apt-get update
+     sudo apt-get install gh
+   
+   Fedora/RHEL:
+     sudo dnf install 'dnf-command(config-manager)'
+     sudo dnf config-manager --add-repo \
+       https://cli.github.com/packages/rpm/gh-cli.repo
+     sudo dnf install gh
+   
+   Verify:
+     gh --version
+
+5. PYTHON DEPENDENCIES
+   -------------------
+   This project uses Python standard library only, but run this to ensure
+   compatibility:
+   
+     python3 -m pip install --upgrade pip
+     python3 -m pip install -r requirements.txt
+
+================================================================================
+VERIFICATION
+================================================================================
+
+After installation, verify all components:
+
+1. Python:
+   python3 --version
+   # Should show 3.8 or higher
+
+2. Docker:
+   docker --version
+   docker info
+   # Should show version and daemon status
+
+3. Docker Buildx:
+   docker buildx version
+   # Should show buildx version
+
+4. GitHub CLI (optional):
+   gh --version
+   # Should show gh version
+
+5. Test Docker permissions:
+   docker ps
+   # Should run without sudo
+
+   If you get permission errors:
+   - Log out and log back in (for group changes to take effect)
+   - Or run: newgrp docker
+
+================================================================================
+USAGE EXAMPLES
+================================================================================
+
+After installation, you can use the scripts:
+
+1. Build Universal Docker Image:
+   python3 build_universal_image.py \
+     --dockerfile ./Dockerfile \
+     --output ./image.tar \
+     --repo_url https://github.com/example/repo.git \
+     --commit abc123def
+
+2. Run Main Orchestrator:
+   python3 -m automation_script.main_orchestrator \
+     https://github.com/owner/repo/pull/123 \
+     /path/to/workspace
+
+3. Get Help:
+   python3 build_universal_image.py --help
+   python3 -m automation_script.main_orchestrator --help
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: "docker: permission denied"
+Solution:
+  1. Add user to docker group: sudo usermod -aG docker $USER
+  2. Log out and log back in
+  3. Or run: newgrp docker
+
+Problem: "docker buildx: command not found"
+Solution:
+  - On Ubuntu/Debian: sudo apt-get install docker-buildx-plugin
+  - On macOS: Update Docker Desktop to latest version
+
+Problem: "Python version too old"
+Solution:
+  - Install Python 3.8 or higher using your package manager
+  - Or download from https://www.python.org/downloads/
+
+Problem: "Docker daemon not running"
+Solution:
+  - macOS: Start Docker Desktop application
+  - Linux: sudo systemctl start docker
+
+Problem: Installation script fails
+Solution:
+  - Run with sudo if needed: sudo ./install.sh
+  - Or follow manual installation steps above
+
+================================================================================
+SYSTEM REQUIREMENTS
+================================================================================
+
+Minimum Requirements:
+- Python 3.8 or higher
+- Docker 20.10 or higher
+- Docker Buildx plugin
+- 4GB RAM (8GB recommended)
+- 10GB free disk space
+
+Supported Operating Systems:
+- macOS 10.15 or higher
+- Ubuntu 20.04 or higher
+- Debian 10 or higher
+- Fedora 35 or higher
+- RHEL/CentOS 8 or higher
+
+================================================================================
+SUPPORT
+================================================================================
+
+For issues or questions:
+1. Check this installation guide
+2. Run the verification steps above
+3. Review the README.md file
+4. Check logs in the project directory
+
+================================================================================

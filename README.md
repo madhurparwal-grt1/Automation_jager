@@ -1,22 +1,113 @@
-# Universal Multi-Architecture Docker Image Builder
+# Automation_jager
 
-This tool builds universal Docker images that support both **linux/amd64** (Intel/AMD) and **linux/arm64** (ARM) architectures in a single OCI-compliant tarball.
+**Automated PR Evaluation and Multi-Architecture Docker Image Builder**
 
-## Overview
+This project provides a comprehensive automation system for:
+- Building universal Docker images supporting **linux/amd64** and **linux/arm64** architectures
+- Automated PR (Pull Request) evaluation with test execution and validation
+- Docker-based test harness for reproducible testing environments
 
-The script uses Docker Buildx to create multi-architecture images that work seamlessly across different CPU architectures. When you load the resulting `.tar` file on any machine, Docker automatically selects the correct architecture for that host.
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Project Structure](#project-structure)
+- [Usage](#usage)
+- [Prerequisites](#prerequisites)
+- [Troubleshooting](#troubleshooting)
+
+## Features
+
+### 🚀 Multi-Architecture Docker Builds
+- Build universal Docker images that work on both Intel/AMD and ARM architectures
+- Single OCI-compliant tarball containing both architecture variants
+- Automatic architecture selection when loading images
+
+### 🔬 PR Evaluation System
+- Automated PR cloning and evaluation
+- Language and test framework detection
+- Docker-based isolated test execution
+- Comprehensive test result categorization and metadata generation
+- Support for Python, JavaScript, TypeScript, Go, Rust, Java, C#, and Ruby
+
+### 🛠️ Robust Automation
+- Self-healing Docker builds
+- Configurable test execution with retries
+- Detailed logging and error reporting
+- Workspace management and cleanup
+
+## Quick Start
+
+### Automatic Installation (Recommended)
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd Automation_jager
+
+# Run the installation script
+chmod +x install.sh
+./install.sh
+```
+
+The installation script will automatically:
+- Detect your operating system
+- Install Python 3.8+, Docker, Docker Buildx, and GitHub CLI
+- Configure Docker permissions
+- Install Python dependencies
+
+### Manual Installation
+
+See [INSTALL.txt](INSTALL.txt) for detailed manual installation instructions.
+
+## Installation
+
+This project provides multiple ways to install dependencies:
+
+### Option 1: Automated Installation (Recommended)
+
+```bash
+./install.sh
+```
+
+Interactive script that installs all required dependencies automatically.
+
+### Option 2: Manual Installation
+
+Follow the comprehensive guide in [INSTALL.txt](INSTALL.txt) for platform-specific manual installation steps.
+
+### Option 3: Python Dependencies Only
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Note: This project uses Python standard library modules, so no external packages are required.
 
 ## Prerequisites
 
 ### System Requirements
-- Docker installed and running
-- Docker Buildx plugin installed
-- `sudo` access (if Docker requires it)
-- Python 3.6 or higher
+- **Python 3.8 or higher**
+- **Docker 20.10 or higher**
+- **Docker Buildx plugin**
+- **GitHub CLI** (optional but recommended for PR operations)
+- 4GB RAM (8GB recommended)
+- 10GB free disk space
 
-### Verify Prerequisites
+### Supported Operating Systems
+- macOS 10.15 or higher
+- Ubuntu 20.04 or higher
+- Debian 10 or higher
+- Fedora 35 or higher
+- RHEL/CentOS 8 or higher
+
+### Verify Installation
 
 ```bash
+# Check Python
+python3 --version  # Should be 3.8+
+
 # Check Docker
 docker --version
 docker info
@@ -24,50 +115,122 @@ docker info
 # Check Buildx
 docker buildx version
 
-# Check Python
-python3 --version
+# Check GitHub CLI (optional)
+gh --version
 ```
 
-### Installing Docker Buildx
+## Project Structure
 
-If Buildx is not available:
-
-**Linux:**
-```bash
-# Docker Desktop includes Buildx by default
-# For Docker Engine, install the plugin:
-sudo apt-get update
-sudo apt-get install docker-buildx-plugin
 ```
-
-**macOS:**
-```bash
-# Included in Docker Desktop for Mac
-# Or install via Homebrew:
-brew install docker-buildx
-```
-
-## Installation
-
-1. Extract the package:
-```bash
-unzip docker_buildx_package.zip
-cd docker_buildx_package
-```
-
-2. Verify the structure:
-```
-docker_buildx_package/
-├── build_universal_image.py          # Main script
-├── automation_script/
-│   ├── __init__.py                   # Package init
-│   └── utils.py                      # Helper utilities
-└── README.md                          # This file
+Automation_jager/
+├── build_universal_image.py      # Multi-arch Docker image builder
+├── install.sh                     # Automated installation script
+├── requirements.txt               # Python dependencies
+├── INSTALL.txt                    # Detailed installation guide
+├── README.md                      # This file
+│
+├── automation_script/             # Main automation package
+│   ├── __init__.py
+│   ├── main_orchestrator.py      # Main entry point for PR evaluation
+│   ├── part1_build_and_base.py   # Docker build and base testing
+│   ├── part2_patch_and_evaluate.py  # Patch application and evaluation
+│   │
+│   ├── config.py                  # Configuration and constants
+│   ├── docker_builder_new.py     # Docker image generation
+│   ├── docker_runner.py           # Container test execution
+│   ├── docker_healing.py          # Self-healing Docker builds
+│   │
+│   ├── git_operations.py          # Git utilities
+│   ├── git_wrappers.py            # High-level Git operations
+│   ├── github_api.py              # GitHub API interactions
+│   │
+│   ├── language_detection.py     # Language/framework detection
+│   ├── environment.py             # Environment setup
+│   ├── test_results.py            # Test result processing
+│   ├── test_targeting.py          # Test identification
+│   │
+│   ├── metadata_generator.py     # Metadata creation
+│   ├── collect_29_fields.py      # Extended metadata collection
+│   ├── artifacts.py               # Artifact management
+│   ├── organize_outputs.py       # Output organization
+│   │
+│   ├── cleanup.py                 # Workspace cleanup
+│   ├── utils.py                   # Utility functions
+│   └── validate_fix.py            # Fix validation
+│
+└── automation_script_build_multi/ # Multi-build utilities
+    ├── __init__.py
+    └── utils.py
 ```
 
 ## Usage
 
-### Basic Usage
+### 1. PR Evaluation System
+
+The main orchestrator provides automated PR evaluation with test execution:
+
+#### Full Workflow (Build + Test + Evaluate)
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+#### With Language/Test Command Overrides
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    --language rust \
+    --test-cmd "cargo test --manifest-path engine/Cargo.toml" \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+#### Part 1 Only (Build Docker Image + Base Tests)
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    --part1-only \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+#### Part 2 Only (Patch + Evaluate)
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    --part2-only \
+    /path/to/workspace
+```
+
+#### Performance Options
+
+```bash
+# Fast mode with shallow clone
+python3 -m automation_script.main_orchestrator \
+    --shallow-clone \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+
+# Reuse existing Docker image
+python3 -m automation_script.main_orchestrator \
+    --reuse-image pr-eval:base-abc123 \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+#### Get Help
+
+```bash
+python3 -m automation_script.main_orchestrator --help
+```
+
+### 2. Universal Docker Image Builder
+
+Build multi-architecture Docker images:
+
+#### Basic Usage
 
 ```bash
 python3 build_universal_image.py \
@@ -77,7 +240,7 @@ python3 build_universal_image.py \
     --commit <commit-sha>
 ```
 
-### Example
+#### Example
 
 ```bash
 python3 build_universal_image.py \
@@ -87,7 +250,7 @@ python3 build_universal_image.py \
     --commit abc123def456
 ```
 
-### Parameters
+#### Parameters
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
@@ -99,7 +262,7 @@ python3 build_universal_image.py \
 | `--builder-name` | No | Name of the buildx builder (default: velora-builder) |
 | `--verbose` or `-v` | No | Enable verbose logging |
 
-### Advanced Examples
+#### Advanced Examples
 
 **With custom build context:**
 ```bash
@@ -121,17 +284,32 @@ python3 build_universal_image.py \
     --verbose
 ```
 
-**Using with sudo (if Docker requires it):**
+**Get Help:**
 ```bash
-# The script automatically uses sudo for Docker commands when needed
-python3 build_universal_image.py \
-    --dockerfile ./Dockerfile \
-    --output ./image.tar \
-    --repo_url https://github.com/example/repo.git \
-    --commit abc123
+python3 build_universal_image.py --help
 ```
 
-## What the Script Does
+## How It Works
+
+### PR Evaluation Workflow
+
+1. **Part 1: Build + Base Testing**
+   - Clone repository and fetch PR references
+   - Detect language and test framework
+   - Build Docker image with all dependencies
+   - Run base tests (without PR changes)
+   - Save state for Part 2
+
+2. **Part 2: Patch + Evaluation**
+   - Generate patch files (full, test-only, code-only)
+   - Verify patches apply cleanly
+   - Run test-patch-only tests (should FAIL)
+   - Run full-patch tests (should PASS)
+   - Categorize tests (F2P, P2P, etc.)
+   - Generate comprehensive metadata
+   - Organize outputs and artifacts
+
+### Multi-Architecture Docker Build
 
 1. **Pre-flight Checks**: Verifies Docker and Buildx are available
 2. **Builder Setup**: Creates or uses a Docker Buildx builder with docker-container driver
@@ -217,21 +395,22 @@ RUN git checkout "${BASE_COMMIT}"
 
 ## Troubleshooting
 
-### Docker Permission Denied
+### Common Issues
 
-If you see permission errors:
+#### Docker Permission Denied
+
 ```bash
 # Add your user to docker group
 sudo usermod -aG docker $USER
 
-# Then log out and back in, or run:
+# Then log out and log back in, or run:
 newgrp docker
 ```
 
-### Buildx Not Available
+#### Buildx Not Available
 
 ```bash
-# Install Docker Buildx plugin
+# Install Docker Buildx plugin (Ubuntu/Debian)
 sudo apt-get update
 sudo apt-get install docker-buildx-plugin
 
@@ -239,28 +418,60 @@ sudo apt-get install docker-buildx-plugin
 brew install docker-buildx
 ```
 
-### Builder Creation Fails
+#### Language/Test Detection Fails
+
+Use manual overrides:
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    --language python \
+    --test-cmd "pytest" \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+#### Docker Build Fails
+
+Check logs and consider using self-healing features (automatic) or manual intervention:
+
+```bash
+# View build logs
+cat /path/to/workspace/<pr_folder>/logs/part1_build_and_base.log
+```
+
+#### Builder Creation Fails
 
 ```bash
 # Remove existing builder and let script recreate it
-docker buildx rm velora-builder
+docker buildx rm multi-arch-builder
 
 # Then run the script again
 ```
 
-### Build Fails for One Architecture
+#### Build Fails for One Architecture
 
 This can happen if:
 - Base image doesn't support that architecture
 - Architecture-specific binaries are being installed
 - Solution: Check Dockerfile for architecture-specific commands
 
-### Output File Not Created
+#### Slow Cloning for Large Repositories
 
-Check:
-- Disk space available
-- Output directory exists and is writable
-- Build completed without errors in the logs
+Use shallow clone:
+
+```bash
+python3 -m automation_script.main_orchestrator \
+    --shallow-clone \
+    https://github.com/owner/repo/pull/123 \
+    /path/to/workspace
+```
+
+### Getting More Help
+
+1. Check [INSTALL.txt](INSTALL.txt) for detailed installation guidance
+2. Run scripts with `--help` flag for usage information
+3. Review logs in workspace directory under `logs/`
+4. Verify all prerequisites are properly installed
 
 ## Performance Tips
 
@@ -297,18 +508,77 @@ A: Yes, ensure you're logged in with `docker login` before running.
 **Q: Can I add more architectures?**  
 A: Yes, add to PLATFORMS (e.g., `"linux/amd64,linux/arm64,linux/arm/v7"`), but ensure base images support them.
 
+## Supported Languages
+
+The PR evaluation system automatically detects and supports:
+
+- **Python** - pytest, unittest
+- **JavaScript/TypeScript** - npm test, jest, mocha
+- **Go** - go test
+- **Rust** - cargo test
+- **Java** - maven, gradle
+- **C#** - dotnet test
+- **Ruby** - rake test, rspec
+
+If auto-detection fails, use `--language` and `--test-cmd` flags to override.
+
+## Output Artifacts
+
+After successful PR evaluation, the workspace contains:
+
+```
+workspace/<pr_folder>/
+├── artifacts/              # Test results and outputs
+├── logs/                   # Execution logs
+├── metadata.json           # Comprehensive PR metadata
+├── patches/                # Generated patch files
+├── repo/                   # Cloned repository
+└── outputs/                # Organized final outputs
+```
+
+## Advanced Configuration
+
+### Environment Variables
+
+- `DOCKER_BUILDKIT=1` - Enable BuildKit (recommended)
+- `DOCKER_BUILD_JOBS` - Number of parallel build jobs
+
+### Custom Configurations
+
+Edit `automation_script/config.py` for:
+- Docker build settings
+- Timeout configurations
+- Test execution parameters
+- Logging preferences
+
+## Contributing
+
+When contributing:
+1. Follow existing code style and structure
+2. Test changes thoroughly with different PR types
+3. Update documentation for new features
+4. Ensure all linters pass
+
 ## Support
 
 For issues or questions:
-1. Check Docker and Buildx are properly installed
-2. Review the verbose output with `--verbose` flag
-3. Verify Dockerfile accepts REPO_URL and BASE_COMMIT args
-4. Check build logs in the terminal output
+
+1. Check [INSTALL.txt](INSTALL.txt) for installation issues
+2. Review [Troubleshooting](#troubleshooting) section
+3. Run scripts with `--help` or `--verbose` flags
+4. Check logs in workspace directory
+5. Verify all prerequisites are installed correctly
+
+## Additional Resources
+
+- **Installation Guide**: See [INSTALL.txt](INSTALL.txt)
+- **Python Dependencies**: See [requirements.txt](requirements.txt)
+- **Automated Install**: Run [install.sh](install.sh)
 
 ## License
 
-This tool is provided as-is for building multi-architecture Docker images.
+This tool is provided as-is for automated PR evaluation and multi-architecture Docker image building.
 
 ---
 
-**Happy Building!** 🚀
+**Happy Automating!** 🚀
