@@ -10,6 +10,7 @@ This project provides a comprehensive automation system for:
 ## Table of Contents
 
 - [Features](#features)
+- [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Project Structure](#project-structure)
@@ -36,6 +37,18 @@ This project provides a comprehensive automation system for:
 - Configurable test execution with retries
 - Detailed logging and error reporting
 - Workspace management and cleanup
+
+## Documentation
+
+This project is organized into distinct modules, each with its own detailed documentation:
+
+| Module | README | Description |
+|--------|--------|-------------|
+| **PR Evaluation System** | [automation_script/README.md](automation_script/README.md) | Full guide to the two-phase PR evaluation pipeline: Docker image building, test execution, patch evaluation, metadata generation, and VeloraHarness integration |
+| **Multi-Arch Build Utilities** | [automation_script_build_multi/README.md](automation_script_build_multi/README.md) | Utility functions for multi-architecture Docker image builds, including command execution helpers |
+| **Installation Guide** | [INSTALL.txt](INSTALL.txt) | Step-by-step manual installation instructions for all supported platforms |
+
+> For a quick overview, continue reading this README. For in-depth usage of the PR evaluation system (command options, output format, supported languages, test identifier formats, VeloraHarness integration), see [automation_script/README.md](automation_script/README.md).
 
 ## Quick Start
 
@@ -127,9 +140,10 @@ Automation_jager/
 ├── install.sh                     # Automated installation script
 ├── requirements.txt               # Python dependencies
 ├── INSTALL.txt                    # Detailed installation guide
-├── README.md                      # This file
+├── README.md                      # This file (start here)
 │
 ├── automation_script/             # Main automation package
+│   ├── README.md                 # Detailed module documentation (see Documentation section)
 │   ├── __init__.py
 │   ├── main_orchestrator.py      # Main entry point for PR evaluation
 │   ├── part1_build_and_base.py   # Docker build and base testing
@@ -139,28 +153,34 @@ Automation_jager/
 │   ├── docker_builder_new.py     # Docker image generation
 │   ├── docker_runner.py           # Container test execution
 │   ├── docker_healing.py          # Self-healing Docker builds
+│   ├── container_runner.py        # Advanced container operations
 │   │
 │   ├── git_operations.py          # Git utilities
 │   ├── git_wrappers.py            # High-level Git operations
 │   ├── github_api.py              # GitHub API interactions
 │   │
 │   ├── language_detection.py     # Language/framework detection
-│   ├── environment.py             # Environment setup
+│   ├── environment.py             # Environment detection and setup
 │   ├── test_results.py            # Test result processing
 │   ├── test_targeting.py          # Test identification
 │   │
+│   ├── metadata.py                # Metadata structure definitions
 │   ├── metadata_generator.py     # Metadata creation
 │   ├── collect_29_fields.py      # Extended metadata collection
 │   ├── artifacts.py               # Artifact management
 │   ├── organize_outputs.py       # Output organization
+│   ├── repo_configs.py            # Repository-specific configurations
 │   │
 │   ├── cleanup.py                 # Workspace cleanup
+│   ├── cleanup_workspaces.py      # Bulk workspace cleanup
 │   ├── utils.py                   # Utility functions
-│   └── validate_fix.py            # Fix validation
+│   ├── validate_fix.py            # Fix validation
+│   └── _archived/                 # Legacy/deprecated code
 │
 └── automation_script_build_multi/ # Multi-build utilities
+    ├── README.md                  # Module documentation (see Documentation section)
     ├── __init__.py
-    └── utils.py
+    └── utils.py                   # Command execution helpers
 ```
 
 ## Usage
@@ -468,10 +488,11 @@ python3 -m automation_script.main_orchestrator \
 
 ### Getting More Help
 
-1. Check [INSTALL.txt](INSTALL.txt) for detailed installation guidance
-2. Run scripts with `--help` flag for usage information
-3. Review logs in workspace directory under `logs/`
-4. Verify all prerequisites are properly installed
+1. See [automation_script/README.md](automation_script/README.md) for detailed PR evaluation usage, supported languages, output formats, and VeloraHarness integration
+2. Check [INSTALL.txt](INSTALL.txt) for detailed installation guidance
+3. Run scripts with `--help` flag for usage information
+4. Review logs in workspace directory under `logs/`
+5. Verify all prerequisites are properly installed
 
 ## Performance Tips
 
@@ -563,14 +584,17 @@ When contributing:
 
 For issues or questions:
 
-1. Check [INSTALL.txt](INSTALL.txt) for installation issues
-2. Review [Troubleshooting](#troubleshooting) section
-3. Run scripts with `--help` or `--verbose` flags
-4. Check logs in workspace directory
-5. Verify all prerequisites are installed correctly
+1. See [automation_script/README.md](automation_script/README.md) for detailed usage and troubleshooting of the PR evaluation system
+2. Check [INSTALL.txt](INSTALL.txt) for installation issues
+3. Review [Troubleshooting](#troubleshooting) section above
+4. Run scripts with `--help` or `--verbose` flags
+5. Check logs in workspace directory
+6. Verify all prerequisites are installed correctly
 
 ## Additional Resources
 
+- **PR Evaluation Guide**: See [automation_script/README.md](automation_script/README.md) for the full pipeline docs
+- **Multi-Build Utilities**: See [automation_script_build_multi/README.md](automation_script_build_multi/README.md) for build helper utilities
 - **Installation Guide**: See [INSTALL.txt](INSTALL.txt)
 - **Python Dependencies**: See [requirements.txt](requirements.txt)
 - **Automated Install**: Run [install.sh](install.sh)

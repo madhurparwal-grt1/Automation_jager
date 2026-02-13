@@ -2,6 +2,8 @@
 
 Automated system for generating Docker images and test artifacts from GitHub Pull Requests.
 
+> **Navigation:** This module is part of the [Automation_jager](../README.md) project. See the [main README](../README.md) for installation, prerequisites, and the multi-architecture Docker image builder. For multi-build utilities, see [automation_script_build_multi](../automation_script_build_multi/README.md).
+
 ## Quick Start
 
 ```bash
@@ -324,22 +326,44 @@ python -m automation_script.main_orchestrator \
 
 ```
 automation_script/
-├── main_orchestrator.py    # Entry point
-├── part1_build_and_base.py # Part 1 implementation
-├── part2_patch_and_evaluate.py # Part 2 implementation
-├── docker_builder_new.py   # Dockerfile generation
-├── docker_runner.py        # Container execution
-├── docker_healing.py       # Self-healing for build failures
-├── config.py               # Configuration constants
-├── git_operations.py       # Git utilities
-├── git_wrappers.py         # Git command wrappers
-├── github_api.py           # GitHub API client
-├── language_detection.py   # Language detection
-├── environment.py          # Environment detection
-├── test_results.py         # Test result parsing
-├── metadata_generator.py   # Metadata generation
-├── utils.py                # Utility functions
-└── cleanup.py              # Cleanup utilities
+├── main_orchestrator.py       # Entry point - coordinates Part 1 and Part 2
+├── part1_build_and_base.py    # Part 1: Docker build and baseline testing
+├── part2_patch_and_evaluate.py # Part 2: Patch application and evaluation
+│
+├── docker_builder_new.py      # Dockerfile generation engine
+├── docker_runner.py           # Container test execution
+├── docker_healing.py          # Self-healing for build failures
+├── container_runner.py        # Advanced container operations
+│
+├── config.py                  # Configuration constants and timeouts
+├── environment.py             # Environment detection (Python, Node, Rust, Java, etc.)
+│
+├── git_operations.py          # Git utilities (clone, fetch, patch, merge-base)
+├── git_wrappers.py            # High-level Git command wrappers
+├── github_api.py              # GitHub API client (PR metadata, commits)
+│
+├── language_detection.py      # Language/framework auto-detection
+├── test_results.py            # Test output parsing and categorization
+├── test_targeting.py          # Test file and command identification
+│
+├── metadata.py                # Metadata structure definitions (dataclasses)
+├── metadata_generator.py      # SWE-bench compatible metadata creation
+├── collect_29_fields.py       # Extended metadata collection (29 fields)
+│
+├── artifacts.py               # Artifact management (test outputs, images, logs)
+├── organize_outputs.py        # Final output organization and file arrangement
+├── repo_configs.py            # Repository-specific configurations and overrides
+├── validate_fix.py            # Patch and metadata validation
+│
+├── utils.py                   # Common utility functions (command execution, etc.)
+├── cleanup.py                 # Workspace cleanup utilities
+├── cleanup_workspaces.py      # Bulk workspace cleanup
+│
+└── _archived/                 # Legacy/deprecated code
+    ├── main.py
+    ├── main_docker.py
+    ├── docker_builder.py
+    └── runner_legacy.py
 ```
 
 ## Requirements
